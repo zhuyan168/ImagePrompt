@@ -4,6 +4,7 @@
     <title>AI图片提示词反推工具</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://code.iconify.design/3/3.1.1/iconify.min.js"></script>
+    <script src="config.js"></script>
     <script>
         tailwind.config = {
             theme: {
@@ -85,6 +86,8 @@
             flex: 1;
             display: flex;
             flex-direction: column;
+            min-height: 0;
+            overflow: hidden;
         }
         
         .title {
@@ -136,6 +139,33 @@
             background-color: white;
             position: relative;
             overflow: hidden;
+            width: 100%;
+            height: 100%;
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        .upload-area.has-image {
+            padding: 0;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            width: 100%;
+            height: 100%;
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+
+        .upload-area.has-image::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            z-index: 1;
         }
         
         .upload-area:hover, .upload-area.drag-over {
@@ -376,11 +406,23 @@
         }
 
         .preview-image {
-            max-width: 100%;
-            max-height: 100%;
+            width: 100%;
+            height: 100%;
             object-fit: contain;
             border-radius: 8px;
             display: block;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            position: relative;
+            z-index: 2;
+            background: #f8fafc;
+            box-sizing: border-box;
+            object-position: center;
+            margin: 0;
+            padding: 0;
+            border: none;
+            flex-shrink: 0;
+            max-width: 100%;
+            max-height: 100%;
         }
 
         .upload-overlay {
@@ -398,6 +440,7 @@
             opacity: 0;
             transition: opacity 0.3s;
             pointer-events: none;
+            z-index: 3;
         }
 
         .upload-area:hover .upload-overlay {
@@ -549,6 +592,19 @@
                 <button class="generate-button" id="generateButton">
                     生成提示词
                 </button>
+
+                <!-- 调试信息区域 -->
+                <div style="margin-top: 15px; padding: 10px; background-color: #f1f5f9; border-radius: 6px; font-size: 12px; color: #64748b;">
+                    <div style="font-weight: 600; margin-bottom: 5px;">调试信息:</div>
+                    <div id="debugInfo">点击生成按钮查看详细调试信息</div>
+                </div>
+
+                <!-- API测试按钮 -->
+                <div style="margin-top: 10px; padding: 8px; background-color: #fef3c7; border-radius: 4px; font-size: 11px; color: #92400e;">
+                    <div style="font-weight: 600; margin-bottom: 3px;">API测试:</div>
+                    <button id="testUploadBtn" style="margin-right: 5px; padding: 4px 8px; font-size: 10px; background: #f59e0b; color: white; border: none; border-radius: 3px; cursor: pointer;">测试文件上传</button>
+                    <button id="testWorkflowBtn" style="padding: 4px 8px; font-size: 10px; background: #10b981; color: white; border: none; border-radius: 3px; cursor: pointer;">测试工作流</button>
+                </div>
             </div>
         </div>
 
@@ -570,6 +626,198 @@
     </div>
 
     <script>
+        // Coze API 服务类
+        class CozeApiService {
+            constructor() {
+                this.config = window.COZE_CONFIG;
+                if (!this.config) {
+                    throw new Error('Coze configuration not found');
+                }
+            }
+
+            // 文件上传功能
+            async uploadFile(file) {
+                try {
+                    console.log('开始上传文件:', file.name, '大小:', file.size, '类型:', file.type);
+
+                    // 创建FormData，按照Coze API官方文档要求
+                    const formData = new FormData();
+                    formData.append('file', file);
+
+                    // 根据官方文档，只需要file参数，不需要其他参数
+
+                    console.log('上传URL:', `${this.config.API_BASE}${this.config.UPLOAD_URL}`);
+                    console.log('Authorization:', `Bearer ${this.config.TOKEN.substring(0, 20)}...`);
+
+                    const response = await fetch(`${this.config.API_BASE}${this.config.UPLOAD_URL}`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${this.config.TOKEN}`,
+                            // 注意：不要设置Content-Type，让浏览器自动设置为multipart/form-data
+                        },
+                        body: formData
+                    });
+
+                    console.log('响应状态:', response.status, response.statusText);
+                    console.log('响应头:', [...response.headers.entries()]);
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        console.error('API错误响应:', errorText);
+                        throw new Error(`文件上传失败: ${response.status} - ${errorText}`);
+                    }
+
+                    const result = await response.json();
+                    console.log('文件上传成功:', result);
+
+                    // 根据Coze官方文档响应格式提取文件ID
+                    if (result.code === 0 && result.data && result.data.id) {
+                        return result.data.id;
+                    } else if (result.code !== 0) {
+                        throw new Error(`文件上传失败: ${result.code} - ${result.msg}`);
+                    } else {
+                        console.error('文件上传响应格式异常:', result);
+                        throw new Error(`文件上传响应格式错误: ${JSON.stringify(result)}`);
+                    }
+                } catch (error) {
+                    console.error('文件上传失败:', error);
+                    throw error;
+                }
+            }
+
+            // 工作流运行功能
+            async runWorkflow(fileId, model) {
+                try {
+                    const requestData = {
+                        workflow_id: this.config.WORKFLOW_ID,
+                        space_id: this.config.SPACE_ID,
+                        parameters: {
+                            image: {
+                                file_id: fileId
+                            },
+                            model: model,
+                            userQuery: "请根据这张图片生成详细的AI绘画提示词",
+                            PromptType: "detailed"
+                        }
+                    };
+
+                    console.log('工作流请求数据:', JSON.stringify(requestData, null, 2));
+                    console.log('使用的fileId:', fileId);
+
+                    const response = await fetch(`${this.config.API_BASE}${this.config.WORKFLOW_URL}`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${this.config.TOKEN}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(requestData)
+                    });
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        throw new Error(`工作流调用失败: ${response.status} - ${errorText}`);
+                    }
+
+                    const responseText = await response.text();
+                    console.log('工作流响应文本:', responseText);
+
+                    // 处理流式响应
+                    const lines = responseText.split('\n');
+                    let finalResult = null;
+                    let errorMessage = null;
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.replace('data: ', ''));
+
+                                // 检查是否是错误消息
+                                if (data.error_message) {
+                                    errorMessage = data.error_message;
+                                } else if (data.output) {
+                                    finalResult = data.output;
+                                } else if (data.content) {
+                                    finalResult = data.content;
+                                } else if (data.data && data.data.output) {
+                                    finalResult = data.data.output;
+                                } else if (data.data && data.data.content) {
+                                    finalResult = data.data.content;
+                                }
+                            } catch (e) {
+                                console.log('解析data行失败:', line);
+                            }
+                        }
+                    }
+
+                    // 如果有错误，抛出错误
+                    if (errorMessage) {
+                        throw new Error(errorMessage);
+                    }
+
+                    // 如果有结果，返回结果
+                    if (finalResult) {
+                        // 如果结果包含 {"output": "..."} 格式，提取其中的内容
+                        if (typeof finalResult === 'string' && finalResult.trim().startsWith('{') && finalResult.trim().endsWith('}')) {
+                            try {
+                                const parsed = JSON.parse(finalResult);
+                                if (parsed.output) {
+                                    return parsed.output;
+                                }
+                            } catch (e) {
+                                // 不是JSON，直接返回
+                            }
+                        }
+                        // 如果结果本身就是JSON格式的output字段值，直接返回
+                        return finalResult;
+                    }
+
+                    // 如果没有找到结果，返回原始响应
+                    return responseText;
+                } catch (error) {
+                    console.error('工作流调用失败:', error);
+                    throw error;
+                }
+            }
+
+            // 验证文件类型和大小
+            validateFile(file) {
+                if (!this.config.SUPPORTED_TYPES.includes(file.type)) {
+                    throw new Error(`不支持的文件类型: ${file.type}，仅支持 ${this.config.SUPPORTED_TYPES.join(', ')}`);
+                }
+
+                if (file.size > this.config.MAX_FILE_SIZE) {
+                    throw new Error(`文件大小超过限制: ${Math.round(file.size / 1024 / 1024)}MB，最大允许 ${Math.round(this.config.MAX_FILE_SIZE / 1024 / 1024)}MB`);
+                }
+
+                return true;
+            }
+        }
+
+        // 初始化API服务
+        let cozeApiService;
+        try {
+            cozeApiService = new CozeApiService();
+            console.log('Coze API服务初始化成功');
+
+            // 如果有调试信息区域，显示初始化状态
+            if (document.getElementById('debugInfo')) {
+                document.getElementById('debugInfo').innerHTML = `
+                    <div>✅ Coze API服务初始化成功</div>
+                    <div>🔧 工作流ID: ${window.COZE_CONFIG.WORKFLOW_ID}</div>
+                    <div>🚀 准备就绪，请上传图片</div>
+                `;
+            }
+        } catch (error) {
+            console.error('Coze API服务初始化失败:', error);
+            if (document.getElementById('debugInfo')) {
+                document.getElementById('debugInfo').innerHTML = `
+                    <div>❌ API服务初始化失败</div>
+                    <div>📝 错误: ${error.message}</div>
+                    <div>🔍 请检查config.js配置</div>
+                `;
+            }
+        }
+
         // 上传区域交互
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
@@ -578,20 +826,24 @@
         const copyButton = document.getElementById('copyButton');
         const promptResult = document.getElementById('promptResult');
         const statusIndicator = document.getElementById('statusIndicator');
-        
+        const debugInfo = document.getElementById('debugInfo');
+        const testUploadBtn = document.getElementById('testUploadBtn');
+        const testWorkflowBtn = document.getElementById('testWorkflowBtn');
+
         // 初始化
         let selectedModel = 'midjourney';
         
         // 点击上传区域触发文件选择
-        uploadArea.addEventListener('click', () => {
-            fileInput.click();
-        });
-        
-        // 文件选择处理
-        fileInput.addEventListener('change', (e) => {
-            if (e.target.files.length > 0) {
-                const file = e.target.files[0];
-                handleFileUpload(file);
+        uploadArea.addEventListener('click', (e) => {
+            // 如果已经有图片，只允许点击覆盖层重新上传
+            if (uploadArea.classList.contains('has-image')) {
+                const overlay = uploadArea.querySelector('.upload-overlay');
+                if (overlay && e.target.closest('.upload-overlay')) {
+                    fileInput.click();
+                }
+            } else {
+                // 没有图片时，点击任何地方都可以上传
+                fileInput.click();
             }
         });
         
@@ -600,48 +852,121 @@
             e.preventDefault();
             uploadArea.classList.add('drag-over');
         });
-        
+
         uploadArea.addEventListener('dragleave', () => {
             uploadArea.classList.remove('drag-over');
         });
-        
+
         uploadArea.addEventListener('drop', (e) => {
             e.preventDefault();
             uploadArea.classList.remove('drag-over');
-            
+
             if (e.dataTransfer.files.length > 0) {
                 const file = e.dataTransfer.files[0];
+
+                // 如果已经有图片，先重置状态
+                if (uploadArea.classList.contains('has-image')) {
+                    uploadArea.classList.remove('has-image');
+                    uploadArea.style.border = '2px dashed #cbd5e1';
+                    uploadArea.style.backgroundColor = 'white';
+                }
+
+                handleFileUpload(file);
+            }
+        });
+
+        // 文件输入处理 - 统一处理所有文件选择
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                const file = e.target.files[0];
+                console.log('文件输入事件触发，文件:', file.name);
+
+                // 清空fileInput的值，允许重复选择同一文件
+                e.target.value = '';
+
+                // 处理文件
                 handleFileUpload(file);
             }
         });
         
         // 文件上传处理
-        function handleFileUpload(file) {
-            // 验证文件类型和大小
-            if (!file.type.match('image.*')) {
-                alert('请上传图片文件（JPG/PNG格式）');
-                return;
-            }
+        async function handleFileUpload(file) {
+            try {
+                console.log('开始处理文件:', file.name);
 
-            if (file.size > 10 * 1024 * 1024) {
-                alert('文件大小超过10MB限制');
-                return;
-            }
+                // 使用API服务验证文件
+                if (cozeApiService) {
+                    cozeApiService.validateFile(file);
+                } else {
+                    // 基础验证
+                    if (!file.type.match('image.*')) {
+                        alert('请上传图片文件（JPG/PNG格式）');
+                        return;
+                    }
 
-            // 更新UI显示缩略图
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                uploadArea.innerHTML = `
-                    <img src="${e.target.result}" alt="Uploaded image preview" class="preview-image">
-                    <div class="upload-overlay">
-                        <span class="iconify" data-icon="clarity:refresh-line" style="font-size: 24px; color: white;"></span>
-                        <p style="color: white; font-size: 14px; margin-top: 8px;">点击重新上传</p>
-                    </div>
-                `;
-                uploadArea.style.border = '2px solid #10b981';
-                uploadArea.style.backgroundColor = 'rgba(16, 185, 129, 0.05)';
-            };
-            reader.readAsDataURL(file);
+                    if (file.size > 10 * 1024 * 1024) {
+                        alert('文件大小超过10MB限制');
+                        return;
+                    }
+                }
+
+                // 如果是重新上传，先重置状态
+                if (uploadArea.classList.contains('has-image')) {
+                    console.log('重置上传区域状态');
+                    uploadArea.classList.remove('has-image');
+                    uploadArea.style.border = '2px dashed #cbd5e1';
+                    uploadArea.style.backgroundColor = 'white';
+                }
+
+                // 更新调试信息
+                if (debugInfo) {
+                    debugInfo.innerHTML = `
+                        <div>✅ 图片已选择</div>
+                        <div>📊 文件名: ${file.name}</div>
+                        <div>📏 文件大小: ${Math.round(file.size / 1024)}KB</div>
+                        <div>🖼️ 文件类型: ${file.type}</div>
+                        <div>🎯 选中模型: ${selectedModel}</div>
+                        <div>🚀 准备就绪，可以生成提示词</div>
+                    `;
+                }
+
+                // 更新UI显示缩略图
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    console.log('文件读取完成，开始更新UI');
+
+                    uploadArea.innerHTML = `
+                        <img src="${e.target.result}" alt="Uploaded image preview" class="preview-image">
+                        <div class="upload-overlay">
+                            <span class="iconify" data-icon="clarity:refresh-line" style="font-size: 24px; color: white;"></span>
+                            <p style="color: white; font-size: 14px; margin-top: 8px;">点击重新上传</p>
+                        </div>
+                    `;
+                    uploadArea.classList.add('has-image');
+                    uploadArea.style.border = '2px solid #10b981';
+                    uploadArea.style.backgroundColor = 'rgba(16, 185, 129, 0.05)';
+
+                    // 确保图片正确加载和显示
+                    const img = uploadArea.querySelector('.preview-image');
+                    img.onload = function() {
+                        console.log('图片加载完成，尺寸:', img.naturalWidth, 'x', img.naturalHeight);
+                    };
+
+                    // 立即存储文件信息到全局变量和dataset
+                    window.currentUploadedFile = file;
+                    uploadArea.dataset.fileName = file.name;
+                    uploadArea.dataset.fileType = file.type;
+                    uploadArea.dataset.fileSize = file.size;
+
+                    console.log('文件已保存到全局变量和dataset:', file.name);
+                    console.log('当前文件对象:', window.currentUploadedFile);
+                };
+                reader.readAsDataURL(file);
+
+            } catch (error) {
+                console.error('文件验证失败:', error);
+                alert(error.message);
+            }
         }
         
         // 选择模型
@@ -654,16 +979,106 @@
         });
         
         // 生成按钮事件
-        generateButton.addEventListener('click', () => {
+        generateButton.addEventListener('click', async () => {
+            // 检查API服务是否初始化
+            if (!cozeApiService) {
+                alert('API服务未初始化，请检查配置');
+                return;
+            }
+
+            // 检查是否已上传图片
+            if (!uploadArea.querySelector('.preview-image')) {
+                alert('请先上传图片');
+                return;
+            }
+
             statusIndicator.className = 'status-indicator loading';
             generateButton.classList.add('loading');
-            
-            // 模拟API请求
-            setTimeout(() => {
+            generateButton.disabled = true;
+
+            // 清空之前的结果
+            promptResult.textContent = '';
+
+            try {
+                // 更新调试信息
+                debugInfo.innerHTML = `
+                    <div>✅ 图片已上传</div>
+                    <div>📊 文件名: ${uploadArea.dataset.fileName || '未知'}</div>
+                    <div>🎯 选中模型: ${selectedModel}</div>
+                    <div>🔄 第1步: 正在上传文件...</div>
+                `;
+
+                // 获取原始文件对象 - 多种方式尝试获取
+                let file = null;
+
+                // 方式1：从全局变量获取
+                if (window.currentUploadedFile) {
+                    file = window.currentUploadedFile;
+                    console.log('从全局变量获取文件:', file.name);
+                } else {
+                    console.log('全局变量中没有文件');
+                }
+
+                // 方式2：从fileInput获取
+                if (!file) {
+                    const fileInput = document.getElementById('fileInput');
+                    if (fileInput && fileInput.files && fileInput.files.length > 0) {
+                        file = fileInput.files[0];
+                        console.log('从fileInput获取文件:', file.name);
+                    } else {
+                        console.log('fileInput中没有文件');
+                    }
+                }
+
+                // 方式3：从dataset中重新构建文件信息（备用）
+                if (!file && uploadArea.dataset.fileName) {
+                    console.log('尝试从dataset获取文件信息');
+                    // 这种情况下需要用户重新上传，因为我们无法重新构建File对象
+                    throw new Error('文件信息丢失，请重新上传图片');
+                }
+
+                if (!file) {
+                    throw new Error('请重新选择文件');
+                }
+
+                console.log('最终使用的文件对象:', file.name, '大小:', file.size);
+
+                // 第一步：上传文件到Coze
+                debugInfo.innerHTML = debugInfo.innerHTML.replace('第1步: 正在上传文件...', '第1步: 正在上传文件到Coze...');
+                const fileId = await cozeApiService.uploadFile(file);
+
+                debugInfo.innerHTML = debugInfo.innerHTML.replace('第1步: 正在上传文件到Coze...', `✅ 第1步: 文件上传成功 (ID: ${fileId.substring(0, 8)}...)`);
+                debugInfo.innerHTML += `<div>🔄 第2步: 正在调用工作流...</div>`;
+
+                // 第二步：调用工作流生成提示词
+                const generatedPrompt = await cozeApiService.runWorkflow(fileId, selectedModel);
+
+                // 显示生成结果
+                promptResult.textContent = generatedPrompt;
                 statusIndicator.className = 'status-indicator success';
+
+                debugInfo.innerHTML = debugInfo.innerHTML.replace('第2步: 正在调用工作流...', '✅ 第2步: 工作流调用成功');
+                debugInfo.innerHTML += `<div>🎉 生成完成！</div>`;
+
+                console.log('提示词生成成功:', generatedPrompt);
+
+            } catch (error) {
+                console.error('生成失败:', error);
+                statusIndicator.className = 'status-indicator error';
+                promptResult.textContent = `生成失败: ${error.message}`;
+
+                // 更新调试信息显示错误
+                debugInfo.innerHTML = `
+                    <div>❌ 生成失败</div>
+                    <div>📝 错误信息: ${error.message}</div>
+                    <div>🔍 请检查浏览器控制台获取详细信息</div>
+                `;
+
+                resetOnError();
+            } finally {
                 generateButton.classList.remove('loading');
-                promptResult.textContent = `在${selectedModel}模型生成的提示词：现代风格咖啡店室内设计，巨大落地窗，自然采光丰富，简约北欧家具，温暖木质色调，绿植点缀，舒适休闲氛围，柔和阴影，高细节渲染 --v 5.1 --ar 3:2`;
-            }, 2000);
+                generateButton.disabled = false;
+            }
         });
         
         // 复制按钮事件
@@ -706,19 +1121,66 @@
             }
         });
 
-        // 处理图片重新上传
-        uploadArea.addEventListener('click', (e) => {
-            // 如果点击的是已有图片的区域，且不是覆盖层，则触发重新上传
-            if (uploadArea.querySelector('.preview-image')) {
-                const overlay = uploadArea.querySelector('.upload-overlay');
-                if (overlay && e.target.closest('.upload-overlay')) {
-                    fileInput.click();
-                } else if (!e.target.closest('.upload-overlay')) {
-                    // 点击图片本身也触发重新上传
-                    fileInput.click();
+        // 添加错误重置功能
+        function resetOnError() {
+            setTimeout(() => {
+                if (statusIndicator.classList.contains('error')) {
+                    statusIndicator.className = 'status-indicator';
                 }
-            } else {
-                fileInput.click();
+            }, 5000);
+        }
+
+        // 文件输入处理已在上面的统一监听器中处理，避免重复
+
+        // API测试按钮事件
+        testUploadBtn.addEventListener('click', async () => {
+            if (!cozeApiService) {
+                debugInfo.innerHTML = '<div>❌ API服务未初始化</div>';
+                return;
+            }
+
+            if (!window.currentUploadedFile) {
+                debugInfo.innerHTML = '<div>❌ 请先上传图片</div>';
+                return;
+            }
+
+            debugInfo.innerHTML = '<div>🔄 正在测试文件上传...</div>';
+
+            try {
+                const fileId = await cozeApiService.uploadFile(window.currentUploadedFile);
+                debugInfo.innerHTML = `
+                    <div>✅ 文件上传测试成功</div>
+                    <div>📄 文件ID: ${fileId.substring(0, 16)}...</div>
+                `;
+            } catch (error) {
+                debugInfo.innerHTML = `
+                    <div>❌ 文件上传测试失败</div>
+                    <div>📝 错误: ${error.message}</div>
+                `;
+            }
+        });
+
+        testWorkflowBtn.addEventListener('click', async () => {
+            if (!cozeApiService) {
+                debugInfo.innerHTML = '<div>❌ API服务未初始化</div>';
+                return;
+            }
+
+            debugInfo.innerHTML = '<div>🔄 正在测试工作流...</div>';
+
+            try {
+                // 使用测试文件ID
+                const testFileId = 'test_file_id_123';
+                const result = await cozeApiService.runWorkflow(testFileId, selectedModel);
+                debugInfo.innerHTML = `
+                    <div>✅ 工作流测试成功</div>
+                    <div>📝 结果: ${result.substring(0, 100)}...</div>
+                `;
+            } catch (error) {
+                debugInfo.innerHTML = `
+                    <div>❌ 工作流测试失败</div>
+                    <div>📝 错误: ${error.message}</div>
+                `;
             }
         });
     </script>
